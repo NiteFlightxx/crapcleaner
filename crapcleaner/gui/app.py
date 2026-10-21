@@ -29,7 +29,6 @@ from crapcleaner.gui.views import (
     AppUpdatesView,
     CleanupView,
     DashboardView,
-    DeveloperStorageView,
     DockerView,
     DrivesView,
     DuplicatesView,
@@ -71,7 +70,6 @@ class MainWindow(QMainWindow):
     _CORE_PAGES = (
         "dashboard",
         "cleanup",
-        "developer_storage",
         "storage",
         "large",
         "duplicates",
@@ -168,7 +166,6 @@ class MainWindow(QMainWindow):
     #: every existing `self.cleanup_view` style call site keeps working unchanged.
     _VIEW_SPECS = {
         "dashboard": ("dashboard", DashboardView),
-        "developer_storage": ("developer_storage", DeveloperStorageView),
         "cleanup_view": ("cleanup", CleanupView),
         "storage_view": ("storage", StorageBreakdownView),
         "large_files_view": ("large", LargeFilesView),
@@ -304,8 +301,6 @@ class MainWindow(QMainWindow):
             key = self._PAGE_KEYS[idx]
             if key == "dashboard":
                 self.dashboard.refresh()
-            elif key == "developer_storage":
-                self.developer_storage.refresh_profiles()
             elif key == "history":
                 self.history_view.refresh()
             elif key == "docker":
@@ -334,8 +329,6 @@ class MainWindow(QMainWindow):
         self.refresh_nav_badges()
         if key == "dashboard":
             self.dashboard.refresh()
-        elif key == "developer_storage":
-            self.developer_storage.refresh_profiles()
         elif key == "history":
             self.history_view.refresh()
         elif key == "specs":
@@ -597,6 +590,9 @@ class MainWindow(QMainWindow):
         self.cleanup_view.clear_highlight()
         self.dashboard.set_scan(report)
         self.cleanup_view.update_sizes()
+        # Only a completed scan may unlock cleanup or migration.  Cancelled scans
+        # can leave partial category sizes behind, so they remain locked.
+        self.cleanup_view.set_scan_result_valid(not report.cancelled)
         previous_snapshot = self._settings.get("last_scan_snapshot", {})
         current_snapshot = {
             "total_identified": report.total_size,
@@ -635,12 +631,18 @@ class MainWindow(QMainWindow):
     def _on_scan_failed(self, message: str):
         self.dashboard.set_scanning(False)
         self.cleanup_view.set_scanning(False)
+        self.cleanup_view.set_scan_result_valid(False)
         self.cleanup_view.clear_status()
         QMessageBox.critical(self, "Scan Failed", message)
 
     def clean_selected(self):
+        if not self.cleanup_view._actions_allowed():
+            self.statusBar().showMessage(
+                "Run a fresh scan before cleaning or migrating.", 5000
+            )
+            return
         categories = self.cleanup_view.selected_categories()
-        if not categories:
+        if not categories or any(category.size <= 0 for category in categories):
             QMessageBox.information(self, "Cleanup", "Select at least one category to clean.")
             return
         use_recycle_bin = self._settings.get("use_recycle_bin", True)

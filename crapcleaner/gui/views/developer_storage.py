@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QFileDialog,
@@ -37,6 +37,8 @@ from crapcleaner.utils.format import format_size
 
 
 class DeveloperStorageView(QWidget):
+    back_requested = Signal()
+
     def __init__(self, main, parent=None):
         super().__init__(parent)
         self._main = main
@@ -47,6 +49,7 @@ class DeveloperStorageView(QWidget):
         self._migration_worker = None
         self._queue: list[MigrationProfile] = []
         self._dry_run = True
+        self._pending_profile_ids: set[str] = set()
         self._build()
 
     def _build(self):
@@ -62,7 +65,7 @@ class DeveloperStorageView(QWidget):
             1,
         )
         self.back_button = QPushButton("Back to Cleanup Manager")
-        self.back_button.clicked.connect(lambda: self._main.navigate("cleanup"))
+        self.back_button.clicked.connect(self.back_requested.emit)
         header.addWidget(self.back_button)
         self.refresh_button = QPushButton("Refresh")
         self.refresh_button.setIcon(material_icon("refresh", "#ffffff"))
@@ -179,6 +182,7 @@ class DeveloperStorageView(QWidget):
     def _on_profiles(self, profiles: list[MigrationProfile]):
         self._profiles = profiles
         self._populate()
+        self._select_pending_profiles()
         self._history = load_migration_history()
         self._populate_history()
         available = sum(1 for profile in profiles if profile.state == MigrationState.READY)
@@ -209,6 +213,28 @@ class DeveloperStorageView(QWidget):
         self.table.resizeColumnsToContents()
         self.table.setColumnWidth(3, 300)
         self.table.setColumnWidth(4, 300)
+
+    def select_profile_ids(self, profile_ids: list[str]):
+        """Preselect profiles passed from the unified cleanup manager."""
+        self._pending_profile_ids = set(profile_ids)
+        self._select_pending_profiles()
+
+    def _select_pending_profiles(self):
+        if not self._pending_profile_ids:
+            return
+        matched = False
+        for row in range(self.table.rowCount()):
+            item = self.table.item(row, 0)
+            if item is None:
+                continue
+            profile_id = str(item.data(Qt.ItemDataRole.UserRole))
+            if profile_id in self._pending_profile_ids or any(
+                profile_id.startswith(prefix) for prefix in self._pending_profile_ids
+            ):
+                item.setCheckState(Qt.CheckState.Checked)
+                matched = True
+        if matched:
+            self._pending_profile_ids.clear()
 
     @staticmethod
     def _state_label(state: MigrationState, language: str) -> str:

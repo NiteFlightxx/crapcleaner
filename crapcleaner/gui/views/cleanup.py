@@ -1,9 +1,11 @@
 """Cleanup view: category tree, scan results, and cleanup controls."""
 
 import os
+import time
 
 from PySide6.QtCore import (
     Qt,
+    QTimer,
 )
 from PySide6.QtGui import (
     QBrush,
@@ -14,6 +16,7 @@ from PySide6.QtGui import (
 from PySide6.QtWidgets import (
     QApplication,
     QFrame,
+    QFileDialog,
     QHBoxLayout,
     QHeaderView,
     QLabel,
@@ -21,6 +24,7 @@ from PySide6.QtWidgets import (
     QMenu,
     QProgressBar,
     QPushButton,
+    QMessageBox,
     QTreeWidget,
     QTreeWidgetItem,
     QVBoxLayout,
@@ -29,7 +33,12 @@ from PySide6.QtWidgets import (
 
 from crapcleaner.gui.icons import icon as material_icon
 from crapcleaner.gui.views.common import _c, _safety_color, _SizeSortedItem, page_header
+from crapcleaner.core.action_policy import (
+    migration_profile_ids_for_category,
+    policy_for_category,
+)
 from crapcleaner.history import last_cleaned, regrowth_estimate
+from crapcleaner.core.migration import discover_profiles
 from crapcleaner.i18n import (
     localized_category_field,
     localized_category_name,
@@ -37,6 +46,7 @@ from crapcleaner.i18n import (
     translate,
 )
 from crapcleaner.models.category import SafetyLevel
+from crapcleaner.gui.workers import MigrationWorker
 from crapcleaner.utils.files import file_manager_name, reveal_in_file_manager
 from crapcleaner.utils.format import (
     format_datetime,
@@ -69,10 +79,23 @@ class CleanupView(QWidget):
         self._safety_filter = "ALL"
         self._sort_descending = True
         self._current_explained_category = None
+        self._migration_queue = []
+        self._migration_worker = None
+        self._migration_active = False
+        self._cleaning = False
+        # Actions are locked until a complete scan has produced current, non-zero
+        # category sizes.  A persisted snapshot is only comparison data; it must
+        # never unlock destructive or migration actions at application startup.
+        self._scan_valid = False
+        self._scan_completed_at = None
         self._build()
+        self._scan_gate_timer = QTimer(self)
+        self._scan_gate_timer.setInterval(1000)
+        self._scan_gate_timer.timeout.connect(self._update_summary)
+        self._scan_gate_timer.start()
 
     def _build(self):
-        layout = QVBoxLayout(self)
+        layout = QVBoxLayout()
         layout.setContentsMargins(24, 20, 24, 16)
         layout.setSpacing(10)
         layout.addWidget(
@@ -179,6 +202,45 @@ class CleanupView(QWidget):
 
         layout.addLayout(filter_row)
 
+        self.migration_targets_card = QFrame()
+        self.migration_targets_card.setProperty("card", "true")
+        self.migration_targets_card.setVisible(False)
+        targets_layout = QVBoxLayout(self.migration_targets_card)
+        targets_layout.setContentsMargins(12, 8, 12, 8)
+        targets_layout.setSpacing(6)
+        targets_title = QLabel("Migration Targets")
+        targets_title.setProperty("strong", "true")
+        targets_layout.addWidget(targets_title)
+
+        dev_target_row = QHBoxLayout()
+        dev_target_row.addWidget(QLabel("Developer cache root"))
+        self.dev_root_edit = QLineEdit(
+            str(self._main._settings.get("migration_dev_root", r"F:\DevCache"))
+        )
+        dev_target_row.addWidget(self.dev_root_edit, 1)
+        dev_browse = QPushButton("Browse...")
+        dev_browse.clicked.connect(lambda: self._choose_migration_root(self.dev_root_edit))
+        dev_target_row.addWidget(dev_browse)
+        targets_layout.addLayout(dev_target_row)
+
+        jb_target_row = QHBoxLayout()
+        jb_target_row.addWidget(QLabel("JetBrains root"))
+        self.jb_root_edit = QLineEdit(
+            str(self._main._settings.get("migration_jetbrains_root", r"F:\JetBrains"))
+        )
+        jb_target_row.addWidget(self.jb_root_edit, 1)
+        jb_browse = QPushButton("Browse...")
+        jb_browse.clicked.connect(lambda: self._choose_migration_root(self.jb_root_edit))
+        jb_target_row.addWidget(jb_browse)
+        targets_layout.addLayout(jb_target_row)
+
+        self.save_migration_targets_button = QPushButton("Save Target Paths")
+        self.save_migration_targets_button.clicked.connect(self._save_migration_targets)
+        targets_layout.addWidget(
+            self.save_migration_targets_button, 0, Qt.AlignmentFlag.AlignRight
+        )
+        layout.addWidget(self.migration_targets_card)
+
         shortcut = QShortcut(QKeySequence("Ctrl+F"), self)
         shortcut.activated.connect(self.search_edit.setFocus)
 
@@ -188,8 +250,10 @@ class CleanupView(QWidget):
         tree_card_lay.setContentsMargins(8, 8, 8, 8)
 
         self.tree = QTreeWidget()
-        self.tree.setColumnCount(4)
-        self.tree.setHeaderLabels(["Category", "Safety Level", "Item Count", "Reclaimable Size"])
+        self.tree.setColumnCount(5)
+        self.tree.setHeaderLabels(
+            ["Category", "Safety Level", "Item Count", "Reclaimable Size", "Recommended Action"]
+        )
         self.tree.setAlternatingRowColors(True)
         self.tree.setIndentation(18)
         self.tree.setAccessibleName("Cleanup categories")
@@ -217,6 +281,15 @@ class CleanupView(QWidget):
         self.clean_button.setFixedWidth(160)
         self.clean_button.clicked.connect(self._main.clean_selected)
         summary_lay.addWidget(self.clean_button)
+
+        self.migrate_button = QPushButton("Migrate Developer Data")
+        self.migrate_button.setProperty("primary", "true")
+        self.migrate_button.setIcon(material_icon("drive_file_move", "#ffffff"))
+        self.migrate_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.migrate_button.setEnabled(False)
+        self.migrate_button.setFixedHeight(36)
+        self.migrate_button.clicked.connect(self._open_migration_for_selected)
+        summary_lay.addWidget(self.migrate_button)
 
         self.summary_label = QLabel("Run a scan to calculate reclaimable space.")
         self.summary_label.setStyleSheet("font-weight: 600; font-size: 13px;")
@@ -259,6 +332,10 @@ class CleanupView(QWidget):
         explain_lay.addWidget(self.explain_label)
         layout.addWidget(explain_card)
 
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.addLayout(layout)
+
     def tree_expand_all(self):
         for i in range(self.tree.topLevelItemCount()):
             item = self.tree.topLevelItem(i)
@@ -273,6 +350,7 @@ class CleanupView(QWidget):
 
     def _set_safety_filter(self, filter_key: str):
         self._safety_filter = filter_key
+        self.migration_targets_card.setVisible(filter_key == "DEVELOPER")
         for k, btn in self._chip_buttons.items():
             active = k == filter_key
             btn.setProperty("active", "true" if active else "false")
@@ -281,8 +359,29 @@ class CleanupView(QWidget):
         self._apply_filter(self.search_edit.text())
 
     def _open_developer_storage(self):
-        """The developer chip is a direct entry to the migration workspace."""
-        self._main.navigate("developer_storage")
+        """Filter the current manager in place; no second page is opened."""
+        self._set_safety_filter("DEVELOPER")
+
+    def _choose_migration_root(self, edit: QLineEdit):
+        chosen = QFileDialog.getExistingDirectory(self, "Choose migration target", edit.text())
+        if chosen:
+            edit.setText(chosen)
+
+    def _save_migration_targets(self):
+        dev_root = os.path.normpath(self.dev_root_edit.text().strip())
+        jetbrains_root = os.path.normpath(self.jb_root_edit.text().strip())
+        if not dev_root or not jetbrains_root:
+            QMessageBox.warning(self, "Invalid target", "Both migration target paths are required.")
+            return
+        from crapcleaner.config import update_settings
+
+        update_settings(
+            migration_dev_root=dev_root,
+            migration_jetbrains_root=jetbrains_root,
+        )
+        self._main._settings["migration_dev_root"] = dev_root
+        self._main._settings["migration_jetbrains_root"] = jetbrains_root
+        self.status_label.setText("Migration target paths saved.")
 
     @staticmethod
     def _is_developer_category(category) -> bool:
@@ -363,9 +462,12 @@ class CleanupView(QWidget):
                 )
             )
             return
+        policy = policy_for_category(category)
         parts = [
             f"<b>{localized_category_name(category.name, language)}</b>",
             localized_category_field(category, "description", language),
+            f"<b>{translate('Recommended action:', language)}</b> "
+            f"{policy.label(language)} — {translate(policy.reason, language)}",
         ]
         if category.what_it_contains:
             parts.append(
@@ -589,6 +691,10 @@ class CleanupView(QWidget):
                 group.sortChildren(3, order)
 
     def populate(self, categories):
+        # Rebuilding the category model invalidates the previous scan result.  The
+        # caller must complete another scan before any action can be enabled.
+        self._scan_valid = False
+        self._scan_completed_at = None
         self._categories = categories
         self.tree.blockSignals(True)
         try:
@@ -612,6 +718,7 @@ class CleanupView(QWidget):
                     item.setText(1, translate(safety.label, language))
                     item.setText(2, str(category.item_count) if category.item_count else "")
                     item.setText(3, format_size(category.size) if category.size else "")
+                    item.setText(4, policy_for_category(category).label(language))
                     item.set_sort_size(category.size)
                     color = QColor(_safety_color(self._theme, safety))
                     item.setForeground(1, color)
@@ -649,13 +756,22 @@ class CleanupView(QWidget):
         finally:
             self.tree.blockSignals(False)
         self._apply_filter(self.search_edit.text() if hasattr(self, "search_edit") else "")
-        for col in range(4):
+        for col in range(5):
             self.tree.resizeColumnToContents(col)
         self.tree.header().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
         self._update_summary()
 
     def apply_language(self, language: str):
         """Update non-QWidget tree cells and the selected category explanation."""
+        self.tree.setHeaderLabels(
+            [
+                translate("Category", language),
+                translate("Safety Level", language),
+                translate("Item Count", language),
+                translate("Reclaimable Size", language),
+                translate("Recommended Action", language),
+            ]
+        )
         for i in range(self.tree.topLevelItemCount()):
             group = self.tree.topLevelItem(i)
             if group is None:
@@ -674,6 +790,7 @@ class CleanupView(QWidget):
                 if category.requires_admin:
                     item.setText(0, f"{item.text(0)}  [{translate('requires admin', language)}]")
                 item.setText(1, translate(category.safety_level.label, language))
+                item.setText(4, policy_for_category(category).label(language))
                 item.setToolTip(0, localized_category_field(category, "description", language))
                 item.setToolTip(1, localized_category_field(category, "description", language))
         current = self.tree.currentItem()
@@ -682,6 +799,7 @@ class CleanupView(QWidget):
         # the generic widget pass must not treat that translated HTML as a new English
         # source string on the next timer tick.
         self.explain_label.setProperty("ccSkipTranslation", True)
+        self._update_summary()
 
     def _auto_check_defaults(self):
         updated_groups = set()
@@ -725,6 +843,10 @@ class CleanupView(QWidget):
                     continue
                 child.setText(2, str(category.item_count) if category.item_count else "")
                 child.setText(3, format_size(category.size) if category.size else "")
+                child.setText(
+                    4,
+                    policy_for_category(category).label(getattr(self._main, "_language", "en")),
+                )
                 if hasattr(child, "set_sort_size"):
                     child.set_sort_size(category.size)
                 group_total += category.size
@@ -733,7 +855,7 @@ class CleanupView(QWidget):
             if hasattr(group, "set_sort_size"):
                 group.set_sort_size(group_total)
         self._auto_check_defaults()
-        for col in range(4):
+        for col in range(5):
             self.tree.resizeColumnToContents(col)
         self.tree.header().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
         self._update_summary()
@@ -751,6 +873,86 @@ class CleanupView(QWidget):
                     if category is not None:
                         selected.append(category)
         return selected
+
+    def _open_migration_for_selected(self):
+        if not self._actions_allowed():
+            return
+        selected = self.selected_categories()
+        migration_candidates = [
+            category
+            for category in selected
+            if migration_profile_ids_for_category(category)
+        ]
+        if not migration_candidates or any(category.size <= 0 for category in migration_candidates):
+            return
+        profile_ids: list[str] = []
+        for category in migration_candidates:
+            profile_ids.extend(migration_profile_ids_for_category(category))
+        profile_ids = list(dict.fromkeys(profile_ids))
+        if not profile_ids:
+            return
+        profiles = [
+            profile
+            for profile in discover_profiles()
+            if profile.id in profile_ids
+            or any(profile.id.startswith(prefix) for prefix in profile_ids)
+        ]
+        if not profiles:
+            QMessageBox.information(
+                self,
+                "Migration",
+                "No registered migration profile matches the selected categories.",
+            )
+            return
+        answer = QMessageBox.question(
+            self,
+            "Confirm Migration",
+            "Selected developer data will be copied, SHA-256 verified, and linked in place. Continue?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        self._migration_queue = profiles
+        self._run_next_migration()
+
+    def _run_next_migration(self):
+        if not self._migration_queue:
+            self._migration_active = False
+            self.progress_bar.setVisible(False)
+            self._update_summary()
+            self.status_label.setText("Migration queue finished.")
+            return
+        self._migration_active = True
+        profile = self._migration_queue.pop(0)
+        self.migrate_button.setEnabled(False)
+        self.progress_bar.setRange(0, 0)
+        self.progress_bar.setVisible(True)
+        self.status_label.setText(f"Migrating {profile.name}...")
+        worker = MigrationWorker(profile, dry_run=False, parent=self)
+        self._migration_worker = worker
+        self._main._register_worker(worker)
+        worker.progress.connect(
+            lambda stage, current, total, item: self.status_label.setText(
+                f"{profile.name}: {stage} {current}/{total} {item}"
+            )
+        )
+        worker.done.connect(self._on_migration_done)
+        worker.failed.connect(self._on_migration_failed)
+        worker.start()
+
+    def _on_migration_done(self, result):
+        if result.success:
+            self.status_label.setText(result.message)
+        else:
+            self.status_label.setText(f"Migration failed: {result.message}")
+        self._run_next_migration()
+
+    def _on_migration_failed(self, message: str):
+        self._migration_queue.clear()
+        self._migration_active = False
+        self.progress_bar.setVisible(False)
+        self._update_summary()
+        self.status_label.setText(f"Migration failed: {message}")
 
     def _apply_filter(self, text: str):
         text = (text or "").strip().lower()
@@ -789,7 +991,26 @@ class CleanupView(QWidget):
     def _update_summary(self):
         selected = self.selected_categories()
         total = sum(c.size for c in selected)
-        self.clean_button.setEnabled(bool(selected) and total > 0)
+        actions_allowed = self._actions_allowed()
+        # A mixed selection containing a temporarily unmeasured (zero-sized)
+        # category remains locked.  This prevents acting on a partial/stale scan.
+        clean_allowed = (
+            actions_allowed
+            and bool(selected)
+            and all(category.size > 0 for category in selected)
+            and total > 0
+        )
+        self.clean_button.setEnabled(clean_allowed)
+        migration_candidates = [
+            category
+            for category in selected
+            if migration_profile_ids_for_category(category)
+        ]
+        self.migrate_button.setEnabled(
+            actions_allowed
+            and bool(migration_candidates)
+            and all(category.size > 0 for category in migration_candidates)
+        )
         self.summary_label.setText(
             f"<b>{len(selected)} categories</b> selected — Estimated space recovery: "
             f"<b style='color: {_c(self._theme, 'accent')};'>{format_size(total)}</b>"
@@ -797,6 +1018,11 @@ class CleanupView(QWidget):
 
     def set_scanning(self, scanning: bool):
         self._scanning = scanning
+        if scanning:
+            # Do not let an old result remain actionable while a replacement scan
+            # is running.  A cancelled/failed scan also stays locked.
+            self._scan_valid = False
+            self._scan_completed_at = None
         self.scan_button.setEnabled(not scanning)
         self.cancel_button.setVisible(scanning)
         if scanning:
@@ -808,6 +1034,38 @@ class CleanupView(QWidget):
             self.progress_bar.setValue(100)
             self.progress_bar.setVisible(False)
             self.status_label.setText("")
+        self._update_summary()
+
+    def set_scan_result_valid(self, valid: bool):
+        """Mark the latest scan as the only source allowed to unlock actions."""
+        self._scan_valid = bool(valid)
+        self._scan_completed_at = time.monotonic() if self._scan_valid else None
+        self._update_summary()
+
+    def _scan_ttl(self) -> float:
+        settings = getattr(self._main, "_settings", {}) or {}
+        try:
+            return float(settings.get("scan_cache_ttl", 300))
+        except (TypeError, ValueError):
+            return 300.0
+
+    def _actions_allowed(self) -> bool:
+        """Return whether the current scan is complete and still trustworthy."""
+        if (
+            self._scanning
+            or self._cleaning
+            or self._migration_active
+            or not self._scan_valid
+            or self._scan_completed_at is None
+        ):
+            return False
+        ttl = self._scan_ttl()
+        # A zero TTL means the cache is disabled, but an explicit completed scan is
+        # still a valid live result until the next scan starts.
+        if ttl > 0 and time.monotonic() - self._scan_completed_at > ttl:
+            self._scan_valid = False
+            return False
+        return True
 
     def highlight_category(self, name: str):
         self.clear_highlight()
@@ -832,7 +1090,12 @@ class CleanupView(QWidget):
                         child.setBackground(col, QBrush())
 
     def set_cleaning(self, cleaning: bool, total: int = 1):
-        self.clean_button.setEnabled(not cleaning)
+        self._cleaning = bool(cleaning)
+        if cleaning:
+            self.clean_button.setEnabled(False)
+            self.migrate_button.setEnabled(False)
+        else:
+            self._update_summary()
         if cleaning:
             self.progress_bar.setRange(0, max(total, 1))
             self.progress_bar.setValue(0)

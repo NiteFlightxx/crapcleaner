@@ -5,6 +5,7 @@ import threading
 from PySide6.QtCore import QThread, Signal
 
 from crapcleaner.core.cleaner import clean_categories, remove_selected_paths
+from crapcleaner.core.migration import inspect_all_profiles, migrate_profile
 from crapcleaner.core.scanner import ScanEngine
 
 _MAX_GUI_LARGE_FILES = 5000
@@ -127,6 +128,48 @@ class CleanWorker(_Worker):
                 excluded_paths=self._excluded_paths,
             )
             self.done.emit(report)
+        except Exception as exc:  # pragma: no cover - defensive
+            self._emit(self.failed, str(exc))
+
+
+class MigrationInspectWorker(_Worker):
+    progress = Signal(int, int, str)
+    done = Signal(list)
+    failed = Signal(str)
+
+    def __init__(self, max_files: int = 500000, parent=None):
+        super().__init__(parent)
+        self._max_files = max_files
+
+    def run(self):
+        try:
+            profiles = inspect_all_profiles(max_files=self._max_files)
+            self._emit(self.done, profiles)
+        except Exception as exc:  # pragma: no cover - defensive
+            self._emit(self.failed, str(exc))
+
+
+class MigrationWorker(_Worker):
+    progress = Signal(str, int, int, str)
+    done = Signal(object)
+    failed = Signal(str)
+
+    def __init__(self, profile, dry_run: bool, parent=None):
+        super().__init__(parent)
+        self._profile = profile
+        self._dry_run = dry_run
+
+    def run(self):
+        try:
+            result = migrate_profile(
+                self._profile,
+                dry_run=self._dry_run,
+                stop_event=self._stop,
+                progress=lambda stage, current, total, item: self.progress.emit(
+                    stage, current, total, item
+                ),
+            )
+            self._emit(self.done, result)
         except Exception as exc:  # pragma: no cover - defensive
             self._emit(self.failed, str(exc))
 

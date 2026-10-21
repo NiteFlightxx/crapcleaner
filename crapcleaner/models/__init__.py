@@ -12,6 +12,11 @@ from crapcleaner.models.report import (
     ScanCategoryResult,
     ScanReport,
 )
+from crapcleaner.models.migration import (
+    MigrationProfile,
+    MigrationResult,
+    MigrationState,
+)
 
 __all__ = [
     "CacheTarget",
@@ -22,4 +27,7 @@ __all__ = [
     "ScanReport",
     "ScanCategoryResult",
     "HistoryEntry",
+    "MigrationProfile",
+    "MigrationResult",
+    "MigrationState",
 ]

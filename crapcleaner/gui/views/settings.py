@@ -36,6 +36,7 @@ from crapcleaner.gui.theme import THEMES
 from crapcleaner.gui.theme import color as theme_color
 from crapcleaner.gui.theme_picker import ThemeGalleryWidget
 from crapcleaner.gui.views.common import page_header
+from crapcleaner.i18n import LANGUAGES
 from crapcleaner.models.category import SafetyLevel
 from crapcleaner.registry import get_all_categories
 from crapcleaner.utils.format import format_datetime, format_size
@@ -129,6 +130,36 @@ class SettingsView(QWidget):
             lambda: self._set_active_tab("custom_studio", 1)
         )
         lay_themes.addWidget(self.theme_gallery)
+
+        language_card = QFrame()
+        language_card.setProperty("card", "true")
+        language_lay = QVBoxLayout(language_card)
+        language_lay.setContentsMargins(14, 10, 14, 10)
+        language_lay.setSpacing(6)
+        language_title = QLabel("Language")
+        language_title.setProperty("strong", "true")
+        language_lay.addWidget(language_title)
+        language_row = QHBoxLayout()
+        language_row.setSpacing(10)
+        language_note = QLabel("Application language")
+        language_note.setProperty("subtle", "true")
+        language_row.addWidget(language_note, 1)
+        self.language_combo = QComboBox()
+        self.language_combo.setProperty("ccSkipTranslation", True)
+        self.language_combo.setMinimumWidth(150)
+        for code, label in LANGUAGES:
+            self.language_combo.addItem(label, code)
+        current_language = self.settings.get("language", "en")
+        language_index = self.language_combo.findData(current_language)
+        self.language_combo.setCurrentIndex(max(0, language_index))
+        self.language_combo.currentIndexChanged.connect(self._on_language_changed)
+        language_row.addWidget(self.language_combo)
+        language_lay.addLayout(language_row)
+        language_hint = QLabel("Language changes apply immediately to the interface.")
+        language_hint.setProperty("subtle", "true")
+        language_hint.setWordWrap(True)
+        language_lay.addWidget(language_hint)
+        lay_themes.addWidget(language_card)
 
         motion_card = QFrame()
         motion_card.setProperty("card", "true")
@@ -790,6 +821,16 @@ class SettingsView(QWidget):
         switch = getattr(self._main, "switch_theme", None)
         if switch is not None:
             switch(theme)
+
+    def _on_language_changed(self, _index: int):
+        language = self.language_combo.currentData()
+        if not isinstance(language, str):
+            return
+        self.settings["language"] = language
+        save_settings({"language": language})
+        setter = getattr(self._main, "set_language", None)
+        if setter is not None:
+            setter(language)
 
     def _preview_theme(self, _label: str):
         """Apply the selected theme immediately and remember it across launches."""

@@ -36,6 +36,9 @@ from crapcleaner.gui.views.common import (
 from crapcleaner.gui.views.dashboard import (
     DashboardView,
 )
+from crapcleaner.gui.views.developer_storage import (
+    DeveloperStorageView,
+)
 from crapcleaner.gui.views.docker import (
     DockerView,
 )
@@ -96,6 +99,7 @@ __all__ = [
     "ContributorCard",
     "CrapTable",
     "DashboardView",
+    "DeveloperStorageView",
     "DockerView",
     "DriveCard",
     "DuplicatesView",

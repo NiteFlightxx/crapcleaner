@@ -11,11 +11,14 @@ CONFIG_FILE = "config.json"
 HISTORY_FILE = "history.jsonl"
 LOG_FILE = "crapcleaner.log"
 
-CONFIG_VERSION = 1
+CONFIG_VERSION = 2
 
 DEFAULT_CONFIG = {
     "config_version": CONFIG_VERSION,
     "theme": "dark",
+    "language": "zh_CN",
+    "migration_dev_root": r"F:\DevCache",
+    "migration_jetbrains_root": r"F:\JetBrains",
     "scan_roots": [],
     "scan_all_drives": True,
     "scan_cache_ttl": 300,

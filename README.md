@@ -17,6 +17,14 @@ Portable single files. Nothing to install, no account, no background service, an
 data about you or your machine is sent anywhere. Every cleanup is previewed first and
 goes to the Recycle Bin by default, so a mistake is recoverable.
 
+### Interface language
+
+The fork includes English and Simplified Chinese. Open **Settings → Theme Gallery →
+Language** and choose **简体中文**. The selection is saved in the CrapCleaner settings
+file and applies to the navigation, settings, cleanup categories, dialogs, scan status,
+and analysis pages. Technical product names, paths, package identifiers, and external
+tool output remain unchanged so they can still be copied into a terminal accurately.
+
 ![CrapCleaner dashboard](assets/screenshots/screen-dashboard.png)
 
 <details>
@@ -128,6 +136,17 @@ selectable. Everything is previewed before anything is removed.
   their length, so the totals line up with the free space the OS reports for
   compressed, sparse, and very small files.
 - **Reports** — export any of it to JSON, CSV, or TXT.
+
+### Developer storage migration
+
+The **Developer Storage** page discovers rebuildable NuGet, npm, Unreal DDC and Zen,
+UBA, and JetBrains data. A migration copies files to a configured target such as
+`F:\DevCache` or `F:\JetBrains`, verifies every copied file with SHA-256, replaces the
+original directory with an NTFS junction, and persists future-write environment
+variables where a tool supports them. Original data is retained as a rollback backup
+until you explicitly finalize the migration. Locked processes, protected paths, existing
+targets, unsupported volumes, failed verification, and incomplete configuration stop the
+operation before the original data is removed.
 
 ### System
 

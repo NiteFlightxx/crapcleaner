@@ -4,7 +4,7 @@ import os
 import sys
 import time
 
-from PySide6.QtCore import QThread
+from PySide6.QtCore import QThread, QTimer
 from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QApplication,
@@ -22,12 +22,14 @@ from crapcleaner.gui.dialogs import ConfirmCleanupDialog, HelpSafetyDialog, Repo
 from crapcleaner.gui.sidebar import Sidebar
 from crapcleaner.gui.theme import apply_theme, make_window_icon, theme_label
 from crapcleaner.gui.theme_watcher import ThemeWatcher
+from crapcleaner.i18n import LANGUAGES, retranslate_tree
 from crapcleaner.gui.views import (
     AboutView,
     AiDataView,
     AppUpdatesView,
     CleanupView,
     DashboardView,
+    DeveloperStorageView,
     DockerView,
     DrivesView,
     DuplicatesView,
@@ -69,6 +71,7 @@ class MainWindow(QMainWindow):
     _CORE_PAGES = (
         "dashboard",
         "cleanup",
+        "developer_storage",
         "storage",
         "large",
         "duplicates",
@@ -96,6 +99,9 @@ class MainWindow(QMainWindow):
         self.setWindowIcon(make_window_icon())
         self._set_default_geometry()
         self._settings = load_settings()
+        self._language = self._settings.get("language", "en")
+        if self._language not in {code for code, _label in LANGUAGES}:
+            self._language = "en"
         disabled = set(self._settings.get("disabled_categories", []))
         self._categories = [c for c in get_all_categories() if c.id not in disabled]
         self._workers = []
@@ -134,12 +140,20 @@ class MainWindow(QMainWindow):
 
         self._theme_watcher = ThemeWatcher(self)
         self._theme_watcher.themes_changed.connect(self._on_themes_changed)
+        # Views update labels from worker results after they are built.  A light
+        # retranslation pass keeps those late-arriving status strings in sync with
+        # the selected language without requiring every worker to know about i18n.
+        self._i18n_timer = QTimer(self)
+        self._i18n_timer.setInterval(1000)
+        self._i18n_timer.timeout.connect(lambda: retranslate_tree(self, self._language))
+        self._i18n_timer.start()
 
         self._setup_shortcuts()
         # The dashboard is the landing page, so it is the one view worth building now.
         self.dashboard.refresh()
         self._apply_theme_to_views(self._theme)
         self.sidebar.apply_theme(self._theme)
+        retranslate_tree(self, self._language)
         self.stack.setCurrentIndex(self._PAGE_KEYS.index("dashboard"))
         self.sidebar.set_active("dashboard")
         # If load_settings() had to move a damaged file aside, say so rather than let
@@ -154,6 +168,7 @@ class MainWindow(QMainWindow):
     #: every existing `self.cleanup_view` style call site keeps working unchanged.
     _VIEW_SPECS = {
         "dashboard": ("dashboard", DashboardView),
+        "developer_storage": ("developer_storage", DeveloperStorageView),
         "cleanup_view": ("cleanup", CleanupView),
         "storage_view": ("storage", StorageBreakdownView),
         "large_files_view": ("large", LargeFilesView),
@@ -222,7 +237,29 @@ class MainWindow(QMainWindow):
             view.set_scan_delta(self._settings.get("last_scan_snapshot", {}), None)
         elif key == "history":
             view.refresh()
+        retranslate_tree(view, self._language)
+        apply_language = getattr(view, "apply_language", None)
+        if apply_language is not None:
+            apply_language(self._language)
         return view
+
+    def set_language(self, language: str, persist: bool = True):
+        """Switch the application language and update all built pages."""
+        supported = {code for code, _label in LANGUAGES}
+        if language not in supported:
+            language = "en"
+        self._language = language
+        if persist:
+            update_settings(language=language)
+            self._settings["language"] = language
+        retranslate_tree(self, language)
+        for view in self._built_views():
+            apply_language = getattr(view, "apply_language", None)
+            if apply_language is not None:
+                apply_language(language)
+        self.statusBar().showMessage(
+            "语言已切换" if language == "zh_CN" else "Language changed", 3000
+        )
 
     def _built_views(self) -> list[QWidget]:
         return [v for v in self._views.values() if v is not None]
@@ -267,6 +304,8 @@ class MainWindow(QMainWindow):
             key = self._PAGE_KEYS[idx]
             if key == "dashboard":
                 self.dashboard.refresh()
+            elif key == "developer_storage":
+                self.developer_storage.refresh_profiles()
             elif key == "history":
                 self.history_view.refresh()
             elif key == "docker":
@@ -295,6 +334,8 @@ class MainWindow(QMainWindow):
         self.refresh_nav_badges()
         if key == "dashboard":
             self.dashboard.refresh()
+        elif key == "developer_storage":
+            self.developer_storage.refresh_profiles()
         elif key == "history":
             self.history_view.refresh()
         elif key == "specs":

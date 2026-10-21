@@ -30,6 +30,12 @@ from PySide6.QtWidgets import (
 from crapcleaner.gui.icons import icon as material_icon
 from crapcleaner.gui.views.common import _c, _safety_color, _SizeSortedItem, page_header
 from crapcleaner.history import last_cleaned, regrowth_estimate
+from crapcleaner.i18n import (
+    localized_category_field,
+    localized_category_name,
+    localized_group_name,
+    translate,
+)
 from crapcleaner.models.category import SafetyLevel
 from crapcleaner.utils.files import file_manager_name, reveal_in_file_manager
 from crapcleaner.utils.format import (
@@ -140,13 +146,17 @@ class CleanupView(QWidget):
             ("LOW_RISK", "Low Risk"),
             ("REVIEW", "Review Required"),
             ("ADMIN", "Requires Admin"),
+            ("DEVELOPER", "Developer Storage"),
         ]
         for key, text in chips:
             btn = QPushButton(text)
             btn.setProperty("chip", "true")
             btn.setProperty("active", "true" if key == "ALL" else "false")
             btn.setCursor(Qt.CursorShape.PointingHandCursor)
-            btn.clicked.connect(lambda _=False, k=key: self._set_safety_filter(k))
+            if key == "DEVELOPER":
+                btn.clicked.connect(self._open_developer_storage)
+            else:
+                btn.clicked.connect(lambda _=False, k=key: self._set_safety_filter(k))
             filter_row.addWidget(btn)
             self._chip_buttons[key] = btn
 
@@ -270,6 +280,28 @@ class CleanupView(QWidget):
             btn.style().polish(btn)
         self._apply_filter(self.search_edit.text())
 
+    def _open_developer_storage(self):
+        """The developer chip is a direct entry to the migration workspace."""
+        self._main.navigate("developer_storage")
+
+    @staticmethod
+    def _is_developer_category(category) -> bool:
+        """Whether a cleanup category belongs to the developer-data filter."""
+        if category is None:
+            return False
+        developer_groups = {"Developer tools", ".NET", "Node.js", "Python"}
+        if getattr(category, "group", "") in developer_groups:
+            return True
+        developer_ids = {
+            "nuget_cache",
+            "npm_cache",
+            "unreal_ddc",
+            "jetbrains_caches",
+            "resharper_caches",
+            "dotnet_temp",
+        }
+        return getattr(category, "id", "") in developer_ids
+
     def _show_tree_menu(self, pos):
         item = self.tree.itemAt(pos)
         if item is None:
@@ -320,28 +352,56 @@ class CleanupView(QWidget):
             self.tree.blockSignals(False)
 
     def _on_current_item_changed(self, item, _previous):
+        language = getattr(self._main, "_language", "en")
         category = item.data(0, Qt.ItemDataRole.UserRole) if item is not None else None
         self._current_explained_category = category
         if category is None:
             self.explain_label.setText(
-                "Select a cleanup category to see what it contains, why it grows, why it is safe to remove, and what will be regenerated."
+                translate(
+                    "Select a cleanup category to see what it contains, why it grows, why it is safe to remove, and what will be regenerated.",
+                    language,
+                )
             )
             return
-        parts = [f"<b>{category.name}</b>", category.description]
+        parts = [
+            f"<b>{localized_category_name(category.name, language)}</b>",
+            localized_category_field(category, "description", language),
+        ]
         if category.what_it_contains:
-            parts.append(f"<b>Contains:</b> {category.what_it_contains}")
+            parts.append(
+                f"<b>{translate('Contains:', language)}</b> "
+                f"{localized_category_field(category, 'what_it_contains', language)}"
+            )
         if category.why_it_grows:
-            parts.append(f"<b>Why it grows:</b> {category.why_it_grows}")
+            parts.append(
+                f"<b>{translate('Why it grows:', language)}</b> "
+                f"{localized_category_field(category, 'why_it_grows', language)}"
+            )
         if category.why_safe_to_delete:
-            parts.append(f"<b>Why safe to delete:</b> {category.why_safe_to_delete}")
+            parts.append(
+                f"<b>{translate('Why safe to delete:', language)}</b> "
+                f"{localized_category_field(category, 'why_safe_to_delete', language)}"
+            )
         if category.regeneration_behavior:
-            parts.append(f"<b>After cleanup:</b> {category.regeneration_behavior}")
+            parts.append(
+                f"<b>{translate('After cleanup:', language)}</b> "
+                f"{localized_category_field(category, 'regeneration_behavior', language)}"
+            )
         if category.requires_admin:
-            parts.append("<b>Permission:</b> Requires administrator privileges.")
+            parts.append(
+                f"<b>{translate('Permission:', language)}</b> "
+                f"{translate('Requires administrator privileges.', language)}"
+            )
         if not category.reversible:
-            parts.append("<b>Reversibility:</b> This action is not reversible.")
+            parts.append(
+                f"<b>{translate('Reversibility:', language)}</b> "
+                f"{translate('This action is not reversible.', language)}"
+            )
         # Read on selection rather than per row: each lookup re-reads the history log.
-        parts.append(f"<b>History:</b> {regrowth_text(category.id)}")
+        parts.append(
+            f"<b>{translate('History:', language)}</b> "
+            f"{translate(regrowth_text(category.id), language)}"
+        )
         self.explain_label.setText("<br><br>".join(parts))
 
     def set_scan_delta(self, previous_snapshot, current_snapshot):
@@ -538,7 +598,9 @@ class CleanupView(QWidget):
                 groups.setdefault(category.group, []).append(category)
 
             for group_name, members in groups.items():
-                group_item = _SizeSortedItem([group_name])
+                language = getattr(self._main, "_language", "en")
+                group_item = _SizeSortedItem([localized_group_name(group_name, language)])
+                group_item.setData(0, Qt.ItemDataRole.UserRole + 1, group_name)
                 group_item.setFlags(
                     group_item.flags()
                     | Qt.ItemFlag.ItemIsUserCheckable & ~Qt.ItemFlag.ItemIsAutoTristate
@@ -547,14 +609,14 @@ class CleanupView(QWidget):
                 for category in members:
                     safety = category.safety_level
                     item = _SizeSortedItem()
-                    item.setText(1, safety.label)
+                    item.setText(1, translate(safety.label, language))
                     item.setText(2, str(category.item_count) if category.item_count else "")
                     item.setText(3, format_size(category.size) if category.size else "")
                     item.set_sort_size(category.size)
                     color = QColor(_safety_color(self._theme, safety))
                     item.setForeground(1, color)
-                    item.setToolTip(0, category.description)
-                    item.setToolTip(1, category.description)
+                    item.setToolTip(0, localized_category_field(category, "description", language))
+                    item.setToolTip(1, localized_category_field(category, "description", language))
                     item.setData(0, Qt.ItemDataRole.UserRole, category)
                     if safety == SafetyLevel.DANGEROUS:
                         item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsUserCheckable)
@@ -577,7 +639,8 @@ class CleanupView(QWidget):
                         item.setCheckState(0, state)
                     item.setText(
                         0,
-                        category.name + ("  [requires admin]" if category.requires_admin else ""),
+                        localized_category_name(category.name, language)
+                        + (f"  [{translate('requires admin', language)}]" if category.requires_admin else ""),
                     )
                     group_item.addChild(item)
                 self._sync_group_state(group_item)
@@ -590,6 +653,35 @@ class CleanupView(QWidget):
             self.tree.resizeColumnToContents(col)
         self.tree.header().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
         self._update_summary()
+
+    def apply_language(self, language: str):
+        """Update non-QWidget tree cells and the selected category explanation."""
+        for i in range(self.tree.topLevelItemCount()):
+            group = self.tree.topLevelItem(i)
+            if group is None:
+                continue
+            raw_group = group.data(0, Qt.ItemDataRole.UserRole + 1)
+            if isinstance(raw_group, str):
+                group.setText(0, localized_group_name(raw_group, language))
+            for j in range(group.childCount()):
+                item = group.child(j)
+                if item is None:
+                    continue
+                category = item.data(0, Qt.ItemDataRole.UserRole)
+                if category is None:
+                    continue
+                item.setText(0, localized_category_name(category.name, language))
+                if category.requires_admin:
+                    item.setText(0, f"{item.text(0)}  [{translate('requires admin', language)}]")
+                item.setText(1, translate(category.safety_level.label, language))
+                item.setToolTip(0, localized_category_field(category, "description", language))
+                item.setToolTip(1, localized_category_field(category, "description", language))
+        current = self.tree.currentItem()
+        self._on_current_item_changed(current, None)
+        # The explanation is generated in the selected language by the method above;
+        # the generic widget pass must not treat that translated HTML as a new English
+        # source string on the next timer tick.
+        self.explain_label.setProperty("ccSkipTranslation", True)
 
     def _auto_check_defaults(self):
         updated_groups = set()
@@ -685,6 +777,8 @@ class CleanupView(QWidget):
                     match_safety = cat is not None and cat.safety_level == SafetyLevel.REVIEW
                 elif self._safety_filter == "ADMIN":
                     match_safety = cat is not None and cat.requires_admin
+                elif self._safety_filter == "DEVELOPER":
+                    match_safety = self._is_developer_category(cat)
 
                 match = match_text and match_safety
                 child.setHidden(not match)

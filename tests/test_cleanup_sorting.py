@@ -14,6 +14,8 @@ def cleanup_view():
     QApplication.instance() or QApplication([])
 
     class DummyMain:
+        _settings = {}
+
         def __getattr__(self, name):
             return lambda *args, **kwargs: None
 

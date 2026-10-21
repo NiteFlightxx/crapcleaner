@@ -32,12 +32,12 @@ import urllib.request
 from dataclasses import dataclass
 
 from crapcleaner import __version__
+from crapcleaner.constants import GITHUB_REPO
 from crapcleaner.utils.logs import get_logger, log_path
 from crapcleaner.utils.platform import is_windows
 
 logger = get_logger("self_update")
 
-GITHUB_REPO = "PatrickJnr/crapcleaner"
 WINDOWS_ASSET = "CrapCleaner.exe"
 LINUX_ASSET = "crapcleaner-linux-x86_64"
 APPIMAGE_ASSET = "CrapCleaner-x86_64.AppImage"
@@ -91,9 +91,11 @@ def install_kind() -> str:
     # sys._MEIPASS; a one-folder build sits next to its own _internal directory.
     meipass = getattr(sys, "_MEIPASS", "")
     executable_dir = os.path.dirname(os.path.abspath(sys.executable))
-    if meipass and os.path.normcase(meipass) != os.path.normcase(executable_dir):
-        return "onefile"
-    if os.path.isdir(os.path.join(executable_dir, "_internal")):
+    # Modern PyInstaller folder builds also set _MEIPASS to a directory other
+    # than the executable directory. Check the actual sibling runtime first.
+    internal = os.path.join(executable_dir, "_internal")
+    runtime = os.path.normcase(os.path.abspath(meipass)) if meipass else ""
+    if runtime in {os.path.normcase(executable_dir), os.path.normcase(internal)}:
         return "onedir"
     return "onefile"
 

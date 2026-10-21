@@ -5,6 +5,13 @@ All notable changes to **CrapCleaner** will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.3] - 2026-10-21
+
+### Fixed
+
+- Empty checked categories no longer disable cleanup or migration for other selected, non-empty categories after a successful scan. Buttons and execution handlers share the same filtered selection; empty categories are skipped.
+- Unscanned, expired, cancelled and busy states still disable both operations. A selection containing only empty categories remains disabled.
+
 ## [1.4.2] - 2026-08-25
 
 Caches for current tooling, and protected secrets.

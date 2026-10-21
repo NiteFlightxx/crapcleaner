@@ -74,7 +74,8 @@ def test_cleaning_state_reports_progress_and_locks_the_button(qt_app):
 
     view.set_cleaning(False)
     view.clear_status()
-    assert view.clean_button.isEnabled() is True
+    # Ending an operation cannot unlock an unscanned/empty selection.
+    assert view.clean_button.isEnabled() is False
     assert view.status_label.text() == ""
 
 

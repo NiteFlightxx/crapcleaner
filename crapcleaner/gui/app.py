@@ -641,8 +641,8 @@ class MainWindow(QMainWindow):
                 "Run a fresh scan before cleaning or migrating.", 5000
             )
             return
-        categories = self.cleanup_view.selected_categories()
-        if not categories or any(category.size <= 0 for category in categories):
+        categories = self.cleanup_view.categories_for_action("clean")
+        if not categories:
             QMessageBox.information(self, "Cleanup", "Select at least one category to clean.")
             return
         use_recycle_bin = self._settings.get("use_recycle_bin", True)
@@ -669,6 +669,11 @@ class MainWindow(QMainWindow):
             dry_run = self._settings.get("dry_run_default", True)
             excluded_paths = set()
 
+        # A confirmation dialog can outlive the scan TTL. Recheck before any
+        # worker starts, using exactly the same eligibility as the button.
+        if self.cleanup_view.categories_for_action("clean") != categories:
+            self.cleanup_view._update_summary()
+            return
         worker = CleanWorker(
             categories,
             dry_run=dry_run,
@@ -677,13 +682,19 @@ class MainWindow(QMainWindow):
         )
         worker.progress.connect(self._on_clean_progress)
         worker.done.connect(lambda report: self._on_clean_done(report, categories))
-        worker.failed.connect(lambda msg: QMessageBox.critical(self, "Cleanup Failed", msg))
+        worker.failed.connect(self._on_clean_failed)
         self._register_worker(worker)
         self.cleanup_view.set_cleaning(True, len(categories))
         worker.start()
 
     def _on_clean_progress(self, name, index, total):
         self.cleanup_view.set_clean_progress(name, index)
+
+    def _on_clean_failed(self, message: str):
+        self.cleanup_view.set_scan_result_valid(False)
+        self.cleanup_view.set_cleaning(False)
+        self.cleanup_view.clear_status()
+        QMessageBox.critical(self, "Cleanup Failed", message)
 
     def _on_clean_done(self, report, categories):
         self.cleanup_view.clear_status()

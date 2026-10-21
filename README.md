@@ -19,6 +19,8 @@ goes to the Recycle Bin by default, so a mistake is recoverable.
 
 ### Interface language
 
+Windows 本地打包与免安装 EXE 使用方法见 [Windows 发布包说明](packaging/WINDOWS_RELEASE.md)。
+
 The fork includes English and Simplified Chinese. Open **Settings → Theme Gallery →
 Language** and choose **简体中文**. The selection is saved in the CrapCleaner settings
 file and applies to the navigation, settings, cleanup categories, dialogs, scan status,

@@ -874,16 +874,27 @@ class CleanupView(QWidget):
                         selected.append(category)
         return selected
 
-    def _open_migration_for_selected(self):
+    def categories_for_action(self, action: str):
+        """Use the same current, non-empty selection for buttons and handlers.
+
+        Empty categories can remain checked after Select Safe/All or a rescan.
+        They are skipped rather than blocking other measured categories.
+        """
         if not self._actions_allowed():
-            return
-        selected = self.selected_categories()
-        migration_candidates = [
-            category
-            for category in selected
-            if migration_profile_ids_for_category(category)
+            return []
+        categories = [
+            category for category in self.selected_categories()
+            if category.size > 0 and category.safety_level != SafetyLevel.DANGEROUS
         ]
-        if not migration_candidates or any(category.size <= 0 for category in migration_candidates):
+        if action == "migrate":
+            return [c for c in categories if migration_profile_ids_for_category(c)]
+        if action == "clean":
+            return categories
+        raise ValueError(f"Unknown cleanup manager action: {action}")
+
+    def _open_migration_for_selected(self):
+        migration_candidates = self.categories_for_action("migrate")
+        if not migration_candidates:
             return
         profile_ids: list[str] = []
         for category in migration_candidates:
@@ -911,6 +922,9 @@ class CleanupView(QWidget):
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
         )
         if answer != QMessageBox.StandardButton.Yes:
+            return
+        if self.categories_for_action("migrate") != migration_candidates:
+            self._update_summary()
             return
         self._migration_queue = profiles
         self._run_next_migration()
@@ -991,26 +1005,8 @@ class CleanupView(QWidget):
     def _update_summary(self):
         selected = self.selected_categories()
         total = sum(c.size for c in selected)
-        actions_allowed = self._actions_allowed()
-        # A mixed selection containing a temporarily unmeasured (zero-sized)
-        # category remains locked.  This prevents acting on a partial/stale scan.
-        clean_allowed = (
-            actions_allowed
-            and bool(selected)
-            and all(category.size > 0 for category in selected)
-            and total > 0
-        )
-        self.clean_button.setEnabled(clean_allowed)
-        migration_candidates = [
-            category
-            for category in selected
-            if migration_profile_ids_for_category(category)
-        ]
-        self.migrate_button.setEnabled(
-            actions_allowed
-            and bool(migration_candidates)
-            and all(category.size > 0 for category in migration_candidates)
-        )
+        self.clean_button.setEnabled(bool(self.categories_for_action("clean")))
+        self.migrate_button.setEnabled(bool(self.categories_for_action("migrate")))
         self.summary_label.setText(
             f"<b>{len(selected)} categories</b> selected — Estimated space recovery: "
             f"<b style='color: {_c(self._theme, 'accent')};'>{format_size(total)}</b>"

@@ -8,6 +8,7 @@ from typing import Any, NamedTuple
 
 from crapcleaner import __version__
 from crapcleaner.config import offline_mode
+from crapcleaner.constants import GITHUB_REPO
 from crapcleaner.utils.logs import get_logger
 
 _logger = get_logger("updater")
@@ -17,7 +18,6 @@ OFFLINE_REASON = (
     "Turn offline mode off in Settings to check for updates."
 )
 
-GITHUB_REPO = "PatrickJnr/crapcleaner"
 RELEASES_API_URL = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
 ALL_RELEASES_URL = f"https://api.github.com/repos/{GITHUB_REPO}/releases"
 TAGS_API_URL = f"https://api.github.com/repos/{GITHUB_REPO}/tags"

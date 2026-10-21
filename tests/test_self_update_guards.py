@@ -56,6 +56,35 @@ def test_a_standalone_copy_is_not_treated_as_managed(monkeypatch, tmp_path):
     assert package_manager_command() is None
 
 
+def test_modern_folder_build_cannot_replace_only_its_executable(monkeypatch, tmp_path):
+    monkeypatch.delenv("APPIMAGE", raising=False)
+    monkeypatch.setattr(sys, "executable", str(tmp_path / "CrapCleaner.exe"))
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(sys, "_MEIPASS", str(tmp_path / "_internal"), raising=False)
+    assert module.install_kind() == "onedir"
+    allowed, reason = can_self_update()
+    assert not allowed
+    assert "folder" in reason
+
+
+def test_onefile_runtime_remains_eligible_even_beside_a_folder_build(monkeypatch, tmp_path):
+    monkeypatch.delenv("APPIMAGE", raising=False)
+    (tmp_path / "_internal").mkdir()
+    monkeypatch.setattr(sys, "executable", str(tmp_path / "CrapCleaner.exe"))
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(sys, "_MEIPASS", str(tmp_path / "_MEI12345"), raising=False)
+    assert module.install_kind() == "onefile"
+
+
+def test_fork_update_check_and_download_share_the_fork_repository():
+    from crapcleaner.constants import GITHUB_REPO
+    from crapcleaner.utils import updater
+
+    assert GITHUB_REPO == "NiteFlightxx/crapcleaner"
+    assert module.GITHUB_REPO == updater.GITHUB_REPO == GITHUB_REPO
+    assert f"/repos/{GITHUB_REPO}/" in updater.RELEASES_API_URL
+
+
 def _update(tmp_path) -> DownloadedUpdate:
     target = tmp_path / "crapcleaner"
     target.write_bytes(b"installed")
